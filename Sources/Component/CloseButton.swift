@@ -21,7 +21,7 @@ public struct CloseButton: View {
                     Color(.secondaryLabel),
                     Color(.secondarySystemFill)
                 )
-                .font(.title3)
+                .font(.title)
         }
     }
 }
