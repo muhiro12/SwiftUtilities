@@ -7,7 +7,7 @@
 
 import SwiftUI
 
-extension Color {
+public extension Color {
     static func random() -> Self {
         return Self(
             red: .random(in: 0...1),

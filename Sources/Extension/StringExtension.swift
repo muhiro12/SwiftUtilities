@@ -5,7 +5,7 @@
 //  Created by Hiromu Nakano on 9/18/24.
 //
 
-extension String {
+public extension String {
     func containsNormalized(_ otherString: String) -> Bool {
         let normalizedSelf = self
             .applyingTransform(.fullwidthToHalfwidth, reverse: false)?
