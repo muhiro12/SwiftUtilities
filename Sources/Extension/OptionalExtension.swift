@@ -11,6 +11,6 @@ public extension Optional where Wrapped: RangeReplaceableCollection {
     }
 
     var isNotEmpty: Bool {
-        !orEmpty.isEmpty
+        orEmpty.isNotEmpty
     }
 }
