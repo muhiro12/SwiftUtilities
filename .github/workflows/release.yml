@@ -17,10 +17,12 @@ jobs:
         run: |
           CURRENT_VERSION=$(git describe --tags --abbrev=0)
           NEW_VERSION=$(echo $CURRENT_VERSION | awk -F. -v OFS=. '{$NF += 1 ; print}')
-          echo "::set-output name=new_version::$NEW_VERSION"
+          echo "NEW_VERSION=$NEW_VERSION" >> $GITHUB_ENV
           git tag $NEW_VERSION
           git push origin $NEW_VERSION
 
       - name: Create GitHub Release
         run: |
           gh release create ${{ steps.version_step.outputs.new_version }} --generate-notes
+        env:
+          NEW_VERSION: ${{ env.NEW_VERSION }}
