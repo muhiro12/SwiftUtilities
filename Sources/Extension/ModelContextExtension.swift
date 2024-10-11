@@ -14,7 +14,7 @@ public extension ModelContext {
         return try fetch(descriptor).first
     }
 
-    func random<T>(_ descriptor: FetchDescriptor<T>) throws -> T? where T : PersistentModel {
+    func fetchRandom<T>(_ descriptor: FetchDescriptor<T>) throws -> T? where T : PersistentModel {
         let count = try fetchCount(descriptor)
         let offset = Int.random(in: 0..<count)
 
