@@ -16,6 +16,7 @@ public extension Color {
         )
     }
 
+    @MainActor
     func adjusted(by adjustmentValue: Int) -> Self {
         modifier(
             AdjustmentModifier(
