@@ -8,7 +8,7 @@
 import Foundation
 
 public protocol IntentPerformer {
-    associatedtype Input
-    associatedtype Output
+    associatedtype Input: Sendable
+    associatedtype Output: Sendable
     static func perform(_ input: Input) async throws -> Output
 }
