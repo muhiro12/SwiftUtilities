@@ -26,6 +26,6 @@ public struct BridgeQuery<Entity: ModelBridgeable>: DynamicProperty {
     }
 
     public var wrappedValue: [Entity] {
-        models.compactMap(Entity.init)
+        models.compactMap { .init($0) }
     }
 }

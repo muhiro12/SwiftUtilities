@@ -7,8 +7,7 @@
 
 import SwiftData
 
-@MainActor
-public protocol ModelBridgeable: Sendable {
+public protocol ModelBridgeable {
     associatedtype Model: PersistentModel
 
     init?(_ model: Model)
