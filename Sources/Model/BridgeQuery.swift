@@ -17,6 +17,10 @@ public struct BridgeQuery<Entity: ModelBridgeable>: DynamicProperty {
         self._models = query
     }
 
+    public init(_ descriptor: FetchDescriptor<Entity.Model>) {
+        self._models = .init(descriptor)
+    }
+
     public init() {
         self._models = .init()
     }
