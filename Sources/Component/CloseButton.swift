@@ -16,16 +16,30 @@ public struct CloseButton: View {
         Button {
             dismiss()
         } label: {
-            Image(systemName: "xmark.circle.fill")
-                .foregroundStyle(
-                    Color(.secondaryLabel),
-                    Color(.secondarySystemFill)
-                )
-                .font(.title2)
+            if #available(iOS 26.0, *) {
+                Image(systemName: "xmark")
+                    .foregroundStyle(
+                        Color(.secondaryLabel)
+                    )
+            } else {
+                Image(systemName: "xmark.circle.fill")
+                    .foregroundStyle(
+                        Color(.secondaryLabel),
+                        Color(.secondarySystemFill)
+                    )
+                    .font(.title2)
+            }
         }
     }
 }
 
 #Preview {
-    CloseButton()
+    NavigationView {
+        CloseButton()
+            .toolbar {
+                ToolbarItem {
+                    CloseButton()
+                }
+            }
+    }
 }
