@@ -22,7 +22,6 @@ struct ContentView: View {
                     NavigationLink("View") { ViewExtensionExampleView() }
                 }
                 Section("Model") {
-                    NavigationLink("SpeechTranscriber") { SpeechTranscriberExampleView() }
                     NavigationLink("IntentPerformer") { IntentPerformerExampleView() }
                     NavigationLink("SwiftUtilitiesError") { SwiftUtilitiesErrorExampleView() }
                 }
