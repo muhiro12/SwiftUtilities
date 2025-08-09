@@ -14,12 +14,43 @@ public struct SpeechTranscription: Sendable, Equatable {
     public let isFinal: Bool
 }
 
-public enum SpeechTranscriberError: Error {
-    case speechNotAuthorized
+public enum SpeechTranscriberError: Error, LocalizedError {
+    case speechNotAuthorized(status: SFSpeechRecognizerAuthorizationStatus)
     case microphoneNotAuthorized
-    case recognizerUnavailable
-    case noResult
+    case recognizerUnavailable(reason: String = "Recognizer is not available")
+    case onDeviceRecognitionUnavailable
+    case audioSessionConfigurationFailed(underlying: Error)
+    case startAudioEngineFailed(underlying: Error)
+    case recognitionFailed(underlying: Error)
+    case silenceTimeoutReached
+    case maxDurationReached
     case cancelled
+
+    public var errorDescription: String? {
+        switch self {
+        case .speechNotAuthorized(let status):
+            return "Speech recognition not authorized: \(status)"
+        case .microphoneNotAuthorized:
+            return "Microphone permission not granted"
+        case .recognizerUnavailable(let reason):
+            return "Speech recognizer unavailable: \(reason)"
+        case .onDeviceRecognitionUnavailable:
+            return "On-device recognition is not supported for this locale/device"
+        case .audioSessionConfigurationFailed(let underlying):
+            return "Failed to configure audio session: \(underlying.localizedDescription)"
+        case .startAudioEngineFailed(let underlying):
+            return "Failed to start audio engine: \(underlying.localizedDescription)"
+        case .recognitionFailed(let underlying):
+            let ns = underlying as NSError
+            return "Recognition failed: \(ns.domain)(\(ns.code)) \(underlying.localizedDescription)"
+        case .silenceTimeoutReached:
+            return "Stopped due to silence timeout"
+        case .maxDurationReached:
+            return "Stopped due to max duration"
+        case .cancelled:
+            return "Operation was cancelled"
+        }
+    }
 }
 
 public enum SpeechTranscriber {
@@ -82,12 +113,17 @@ public enum SpeechTranscriber {
                 Task {
                     do {
                         try await controller.prepare()
-                        try await controller.start { transcription, isFinal in
-                            continuation.yield(SpeechTranscription(text: transcription, isFinal: isFinal))
-                            if isFinal {
-                                continuation.finish()
+                        try await controller.start(
+                            onResult: { transcription, isFinal in
+                                continuation.yield(SpeechTranscription(text: transcription, isFinal: isFinal))
+                                if isFinal {
+                                    continuation.finish()
+                                }
+                            },
+                            onError: { error in
+                                continuation.finish(throwing: error)
                             }
-                        }
+                        )
                     } catch is CancellationError {
                         controller.cancel()
                         continuation.finish(throwing: SpeechTranscriberError.cancelled)
@@ -144,26 +180,43 @@ public enum SpeechTranscriber {
 
         func prepare() async throws {
             try await SpeechTranscriber.ensureAuthorizations()
-            guard let recognizer = speechRecognizer, recognizer.isAvailable else {
-                throw SpeechTranscriberError.recognizerUnavailable
+            guard let recognizer = speechRecognizer else {
+                throw SpeechTranscriberError.recognizerUnavailable()
+            }
+            if onDeviceOnly, #available(iOS 13.0, *), recognizer.supportsOnDeviceRecognition == false {
+                throw SpeechTranscriberError.onDeviceRecognitionUnavailable
+            }
+            guard recognizer.isAvailable else {
+                throw SpeechTranscriberError.recognizerUnavailable(reason: "Recognizer reports isAvailable == false")
             }
             // Configure audio session
-            let session = AVAudioSession.sharedInstance()
-            try session.setCategory(.record, mode: .measurement, options: [.duckOthers, .allowBluetooth, .allowBluetoothA2DP])
-            try session.setActive(true, options: .notifyOthersOnDeactivation)
+            do {
+                let session = AVAudioSession.sharedInstance()
+                try session.setCategory(.record, mode: .measurement, options: [.duckOthers, .allowBluetooth, .allowBluetoothA2DP])
+                try session.setActive(true, options: .notifyOthersOnDeactivation)
+            } catch {
+                throw SpeechTranscriberError.audioSessionConfigurationFailed(underlying: error)
+            }
         }
 
         func startAndAwaitFinal() async throws -> String {
             try await withCheckedThrowingContinuation { (cont: CheckedContinuation<String, Error>) in
                 self.finalContinuation = cont
                 do {
-                    try self.start { [weak self] text, isFinal in
-                        guard let self else { return }
-                        if isFinal, let cont = self.finalContinuation {
+                    try self.start(
+                        onResult: { [weak self] text, isFinal in
+                            guard let self else { return }
+                            if isFinal, let cont = self.finalContinuation {
+                                self.finalContinuation = nil
+                                cont.resume(returning: text)
+                            }
+                        },
+                        onError: { [weak self] err in
+                            guard let self, let cont = self.finalContinuation else { return }
                             self.finalContinuation = nil
-                            cont.resume(returning: text)
+                            cont.resume(throwing: err)
                         }
-                    }
+                    )
                 } catch {
                     self.finalContinuation = nil
                     cont.resume(throwing: error)
@@ -171,8 +224,11 @@ public enum SpeechTranscriber {
             }
         }
 
-        func start(onResult: @escaping @Sendable (_ text: String, _ isFinal: Bool) -> Void) throws {
-            guard let recognizer = speechRecognizer else { throw SpeechTranscriberError.recognizerUnavailable }
+        func start(
+            onResult: @escaping @Sendable (_ text: String, _ isFinal: Bool) -> Void,
+            onError: @escaping @Sendable (_ error: Error) -> Void
+        ) throws {
+            guard let recognizer = speechRecognizer else { throw SpeechTranscriberError.recognizerUnavailable() }
 
             let request = SFSpeechAudioBufferRecognitionRequest()
             request.shouldReportPartialResults = true
@@ -187,7 +243,11 @@ public enum SpeechTranscriber {
             }
 
             audioEngine.prepare()
-            try audioEngine.start()
+            do {
+                try audioEngine.start()
+            } catch {
+                throw SpeechTranscriberError.startAudioEngineFailed(underlying: error)
+            }
 
             recognitionTask = recognizer.recognitionTask(with: request) { [weak self] result, error in
                 guard let self else { return }
@@ -200,9 +260,10 @@ public enum SpeechTranscriber {
                 }
                 if let error {
                     self.stop()
+                    onError(SpeechTranscriberError.recognitionFailed(underlying: error))
                     if let cont = self.finalContinuation {
                         self.finalContinuation = nil
-                        cont.resume(throwing: error)
+                        cont.resume(throwing: SpeechTranscriberError.recognitionFailed(underlying: error))
                     }
                     // Bubble up if sequence is still active; caller will handle finish.
                     // For the one-shot path, if no result yet, we don't resume twice.
@@ -244,12 +305,22 @@ public enum SpeechTranscriber {
 
         func prepare() async throws {
             try await SpeechTranscriber.ensureAuthorizations()
-            guard let recognizer = speechRecognizer, recognizer.isAvailable else {
-                throw SpeechTranscriberError.recognizerUnavailable
+            guard let recognizer = speechRecognizer else {
+                throw SpeechTranscriberError.recognizerUnavailable()
             }
-            let session = AVAudioSession.sharedInstance()
-            try session.setCategory(.record, mode: .measurement, options: [.duckOthers, .allowBluetooth, .allowBluetoothA2DP])
-            try session.setActive(true, options: .notifyOthersOnDeactivation)
+            if onDeviceOnly, #available(iOS 13.0, *), recognizer.supportsOnDeviceRecognition == false {
+                throw SpeechTranscriberError.onDeviceRecognitionUnavailable
+            }
+            guard recognizer.isAvailable else {
+                throw SpeechTranscriberError.recognizerUnavailable(reason: "Recognizer reports isAvailable == false")
+            }
+            do {
+                let session = AVAudioSession.sharedInstance()
+                try session.setCategory(.record, mode: .measurement, options: [.duckOthers, .allowBluetooth, .allowBluetoothA2DP])
+                try session.setActive(true, options: .notifyOthersOnDeactivation)
+            } catch {
+                throw SpeechTranscriberError.audioSessionConfigurationFailed(underlying: error)
+            }
         }
 
         func recordAndTranscribe(maxDuration: TimeInterval, silenceTimeout: TimeInterval) async throws -> String {
@@ -287,7 +358,7 @@ public enum SpeechTranscriber {
             ]
             recorder = try AVAudioRecorder(url: tempURL, settings: settings)
             recorder?.isMeteringEnabled = true
-            guard recorder?.record() == true else { throw SpeechTranscriberError.recognizerUnavailable }
+            guard recorder?.record() == true else { throw SpeechTranscriberError.recognizerUnavailable() }
         }
 
         private func stopRecording() {
@@ -321,12 +392,12 @@ public enum SpeechTranscriber {
 
     // Shared authorization helper
     private static func ensureAuthorizations() async throws {
-        let speechAuthorized = await withCheckedContinuation { (cont: CheckedContinuation<Bool, Never>) in
+        let status = await withCheckedContinuation { (cont: CheckedContinuation<SFSpeechRecognizerAuthorizationStatus, Never>) in
             SFSpeechRecognizer.requestAuthorization { status in
-                cont.resume(returning: status == .authorized)
+                cont.resume(returning: status)
             }
         }
-        guard speechAuthorized else { throw SpeechTranscriberError.speechNotAuthorized }
+        guard status == .authorized else { throw SpeechTranscriberError.speechNotAuthorized(status: status) }
 
         let micAuthorized = await withCheckedContinuation { (cont: CheckedContinuation<Bool, Never>) in
             AVAudioSession.sharedInstance().requestRecordPermission { granted in
