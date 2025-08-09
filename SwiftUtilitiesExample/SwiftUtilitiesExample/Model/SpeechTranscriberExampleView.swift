@@ -8,11 +8,17 @@ struct SpeechTranscriberExampleView: View {
     @State private var isStreaming = false
     @State private var streamTask: Task<Void, Never>? = nil
     @State private var onDeviceOnly = true
+    @State private var strategy: SpeechTranscriber.Strategy = .realtime
 
     var body: some View {
         List {
             Section("設定") {
                 Toggle("オンデバイス優先", isOn: $onDeviceOnly)
+                Picker("方式", selection: $strategy) {
+                    Text("リアルタイム").tag(SpeechTranscriber.Strategy.realtime)
+                    Text("録音してから認識").tag(SpeechTranscriber.Strategy.fileBuffered)
+                }
+                .pickerStyle(.segmented)
             }
             Section("One-shot (async/await)") {
                 Text(onceText.isEmpty ? "—" : onceText)
@@ -26,7 +32,7 @@ struct SpeechTranscriberExampleView: View {
                     Task {
                         defer { isOneShotRunning = false }
                         do {
-                            let text = try await SpeechTranscriber.transcribeOnce(onDeviceOnly: onDeviceOnly)
+                            let text = try await SpeechTranscriber.transcribeOnce(onDeviceOnly: onDeviceOnly, strategy: strategy)
                             onceText = text
                         } catch {
                             onceText = "Error: \(error.localizedDescription)"
@@ -48,7 +54,7 @@ struct SpeechTranscriberExampleView: View {
                         streamText = ""
                         streamTask = Task {
                             do {
-                                for try await item in SpeechTranscriber.transcriptions(onDeviceOnly: onDeviceOnly) {
+                                for try await item in SpeechTranscriber.transcriptions(onDeviceOnly: onDeviceOnly, strategy: strategy) {
                                     streamText = item.text
                                     if item.isFinal { break }
                                 }

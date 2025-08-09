@@ -23,6 +23,10 @@ public enum SpeechTranscriberError: Error {
 }
 
 public enum SpeechTranscriber {
+    public enum Strategy: Sendable {
+        case realtime // AVAudioEngine + SFSpeechAudioBufferRecognitionRequest
+        case fileBuffered // AVAudioRecorder -> SFSpeechURLRecognitionRequest
+    }
     // MARK: Public APIs
 
     /// Captures voice from the microphone and returns a single finalized transcription.
@@ -32,17 +36,30 @@ public enum SpeechTranscriber {
     /// - Returns: Final recognized text.
     public static func transcribeOnce(
         locale: Locale = .current,
-        onDeviceOnly: Bool = true
+        onDeviceOnly: Bool = true,
+        strategy: Strategy = .realtime,
+        maxDuration: TimeInterval = 15,
+        silenceTimeout: TimeInterval = 1.2
     ) async throws -> String {
-        let controller = RecognitionController(locale: locale, onDeviceOnly: onDeviceOnly)
-        defer { controller.stop() }
-        try await controller.prepare()
-
-        return try await withTaskCancellationHandler(operation: {
-            try await controller.startAndAwaitFinal()
-        }, onCancel: {
-            controller.cancel()
-        })
+        switch strategy {
+        case .realtime:
+            let controller = RecognitionController(locale: locale, onDeviceOnly: onDeviceOnly)
+            defer { controller.stop() }
+            try await controller.prepare()
+            return try await withTaskCancellationHandler(operation: {
+                try await controller.startAndAwaitFinal()
+            }, onCancel: {
+                controller.cancel()
+            })
+        case .fileBuffered:
+            let controller = FileBufferedController(locale: locale, onDeviceOnly: onDeviceOnly)
+            try await controller.prepare()
+            return try await withTaskCancellationHandler(operation: {
+                try await controller.recordAndTranscribe(maxDuration: maxDuration, silenceTimeout: silenceTimeout)
+            }, onCancel: {
+                controller.cancel()
+            })
+        }
     }
 
     /// Returns an AsyncSequence that yields partial and final transcriptions while listening.
@@ -53,31 +70,57 @@ public enum SpeechTranscriber {
     /// - Returns: AsyncSequence of SpeechTranscription.
     public static func transcriptions(
         locale: Locale = .current,
-        onDeviceOnly: Bool = true
+        onDeviceOnly: Bool = true,
+        strategy: Strategy = .realtime,
+        maxDuration: TimeInterval = 15,
+        silenceTimeout: TimeInterval = 1.2
     ) -> AsyncThrowingStream<SpeechTranscription, Error> {
-        let controller = RecognitionController(locale: locale, onDeviceOnly: onDeviceOnly)
-
-        return AsyncThrowingStream { continuation in
-            Task {
-                do {
-                    try await controller.prepare()
-                    try await controller.start { transcription, isFinal in
-                        continuation.yield(SpeechTranscription(text: transcription, isFinal: isFinal))
-                        if isFinal {
-                            continuation.finish()
+        switch strategy {
+        case .realtime:
+            let controller = RecognitionController(locale: locale, onDeviceOnly: onDeviceOnly)
+            return AsyncThrowingStream { continuation in
+                Task {
+                    do {
+                        try await controller.prepare()
+                        try await controller.start { transcription, isFinal in
+                            continuation.yield(SpeechTranscription(text: transcription, isFinal: isFinal))
+                            if isFinal {
+                                continuation.finish()
+                            }
                         }
+                    } catch is CancellationError {
+                        controller.cancel()
+                        continuation.finish(throwing: SpeechTranscriberError.cancelled)
+                    } catch {
+                        controller.cancel()
+                        continuation.finish(throwing: error)
                     }
-                } catch is CancellationError {
-                    controller.cancel()
-                    continuation.finish(throwing: SpeechTranscriberError.cancelled)
-                } catch {
-                    controller.cancel()
-                    continuation.finish(throwing: error)
+                }
+                continuation.onTermination = { @Sendable _ in
+                    controller.stop()
                 }
             }
-
-            continuation.onTermination = { @Sendable _ in
-                controller.stop()
+        case .fileBuffered:
+            // For fileBuffered strategy, we yield only a single final transcription.
+            return AsyncThrowingStream { continuation in
+                let controller = FileBufferedController(locale: locale, onDeviceOnly: onDeviceOnly)
+                Task {
+                    do {
+                        try await controller.prepare()
+                        let text = try await controller.recordAndTranscribe(maxDuration: maxDuration, silenceTimeout: silenceTimeout)
+                        continuation.yield(SpeechTranscription(text: text, isFinal: true))
+                        continuation.finish()
+                    } catch is CancellationError {
+                        controller.cancel()
+                        continuation.finish(throwing: SpeechTranscriberError.cancelled)
+                    } catch {
+                        controller.cancel()
+                        continuation.finish(throwing: error)
+                    }
+                }
+                continuation.onTermination = { @Sendable _ in
+                    controller.cancel()
+                }
             }
         }
     }
@@ -100,7 +143,7 @@ public enum SpeechTranscriber {
         }
 
         func prepare() async throws {
-            try await Self.ensureAuthorizations()
+            try await SpeechTranscriber.ensureAuthorizations()
             guard let recognizer = speechRecognizer, recognizer.isAvailable else {
                 throw SpeechTranscriberError.recognizerUnavailable
             }
@@ -181,20 +224,115 @@ public enum SpeechTranscriber {
             stop()
         }
 
-        private static func ensureAuthorizations() async throws {
-            let speechAuthorized = await withCheckedContinuation { (cont: CheckedContinuation<Bool, Never>) in
-                SFSpeechRecognizer.requestAuthorization { status in
-                    cont.resume(returning: status == .authorized)
-                }
-            }
-            guard speechAuthorized else { throw SpeechTranscriberError.speechNotAuthorized }
+        // Authorization moved to SpeechTranscriber.ensureAuthorizations()
+    }
 
-            let micAuthorized = await withCheckedContinuation { (cont: CheckedContinuation<Bool, Never>) in
-                AVAudioSession.sharedInstance().requestRecordPermission { granted in
-                    cont.resume(returning: granted)
+    // MARK: - File Buffered Controller
+
+    private final class FileBufferedController: @unchecked Sendable {
+        private let locale: Locale
+        private let onDeviceOnly: Bool
+        private let speechRecognizer: SFSpeechRecognizer?
+        private var recorder: AVAudioRecorder?
+        private var tempURL: URL = FileManager.default.temporaryDirectory.appendingPathComponent("speech_recording.m4a")
+
+        init(locale: Locale, onDeviceOnly: Bool) {
+            self.locale = locale
+            self.onDeviceOnly = onDeviceOnly
+            self.speechRecognizer = SFSpeechRecognizer(locale: locale)
+        }
+
+        func prepare() async throws {
+            try await SpeechTranscriber.ensureAuthorizations()
+            guard let recognizer = speechRecognizer, recognizer.isAvailable else {
+                throw SpeechTranscriberError.recognizerUnavailable
+            }
+            let session = AVAudioSession.sharedInstance()
+            try session.setCategory(.record, mode: .measurement, options: [.duckOthers, .allowBluetooth, .allowBluetoothA2DP])
+            try session.setActive(true, options: .notifyOthersOnDeactivation)
+        }
+
+        func recordAndTranscribe(maxDuration: TimeInterval, silenceTimeout: TimeInterval) async throws -> String {
+            try startRecording()
+            defer { stopRecording() }
+            try await waitForSilenceOrTimeout(maxDuration: maxDuration, silenceTimeout: silenceTimeout)
+
+            let request = SFSpeechURLRecognitionRequest(url: tempURL)
+            request.requiresOnDeviceRecognition = onDeviceOnly
+            request.shouldReportPartialResults = false
+
+            return try await withCheckedThrowingContinuation { (cont: CheckedContinuation<String, Error>) in
+                speechRecognizer?.recognitionTask(with: request) { result, error in
+                    if let result, result.isFinal {
+                        cont.resume(returning: result.bestTranscription.formattedString)
+                    } else if let error {
+                        cont.resume(throwing: error)
+                    }
                 }
             }
-            guard micAuthorized else { throw SpeechTranscriberError.microphoneNotAuthorized }
         }
+
+        func cancel() {
+            stopRecording()
+        }
+
+        private func startRecording() throws {
+            // Remove old temp file
+            try? FileManager.default.removeItem(at: tempURL)
+            let settings: [String: Any] = [
+                AVFormatIDKey: kAudioFormatMPEG4AAC,
+                AVSampleRateKey: 44_100,
+                AVNumberOfChannelsKey: 1,
+                AVEncoderAudioQualityKey: AVAudioQuality.high.rawValue
+            ]
+            recorder = try AVAudioRecorder(url: tempURL, settings: settings)
+            recorder?.isMeteringEnabled = true
+            guard recorder?.record() == true else { throw SpeechTranscriberError.recognizerUnavailable }
+        }
+
+        private func stopRecording() {
+            if recorder?.isRecording == true {
+                recorder?.stop()
+            }
+            recorder = nil
+        }
+
+        private func waitForSilenceOrTimeout(maxDuration: TimeInterval, silenceTimeout: TimeInterval) async throws {
+            let start = Date()
+            var lastNonSilent = Date()
+            let silenceThreshold: Float = -45 // dB
+            while true {
+                try Task.checkCancellation()
+                recorder?.updateMeters()
+                if let power = recorder?.averagePower(forChannel: 0) {
+                    if power > silenceThreshold {
+                        lastNonSilent = Date()
+                    }
+                }
+                let elapsed = Date().timeIntervalSince(start)
+                let silenceElapsed = Date().timeIntervalSince(lastNonSilent)
+                if elapsed >= maxDuration || silenceElapsed >= silenceTimeout {
+                    break
+                }
+                try await Task.sleep(nanoseconds: 100_000_000) // 100ms
+            }
+        }
+    }
+
+    // Shared authorization helper
+    private static func ensureAuthorizations() async throws {
+        let speechAuthorized = await withCheckedContinuation { (cont: CheckedContinuation<Bool, Never>) in
+            SFSpeechRecognizer.requestAuthorization { status in
+                cont.resume(returning: status == .authorized)
+            }
+        }
+        guard speechAuthorized else { throw SpeechTranscriberError.speechNotAuthorized }
+
+        let micAuthorized = await withCheckedContinuation { (cont: CheckedContinuation<Bool, Never>) in
+            AVAudioSession.sharedInstance().requestRecordPermission { granted in
+                cont.resume(returning: granted)
+            }
+        }
+        guard micAuthorized else { throw SpeechTranscriberError.microphoneNotAuthorized }
     }
 }
