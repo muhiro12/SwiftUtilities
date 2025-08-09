@@ -5,7 +5,7 @@ struct CollectionExtensionExampleView: View {
 
     var body: some View {
         VStack(spacing: 8) {
-            Text("Array.empty.count: \(Array<Int>.empty.count)")
+            Text("Array.empty.count: \([Int].empty.count)")
             Text("array.isNotEmpty: \(array.isNotEmpty.description)")
         }
         .padding()
