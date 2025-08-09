@@ -113,7 +113,7 @@ public enum SpeechTranscriber {
                 Task {
                     do {
                         try await controller.prepare()
-                        try await controller.start(
+                        try controller.start(
                             onResult: { transcription, isFinal in
                                 continuation.yield(SpeechTranscription(text: transcription, isFinal: isFinal))
                                 if isFinal {
@@ -192,7 +192,7 @@ public enum SpeechTranscriber {
             // Configure audio session
             do {
                 let session = AVAudioSession.sharedInstance()
-                try session.setCategory(.record, mode: .measurement, options: [.duckOthers, .allowBluetooth, .allowBluetoothA2DP])
+                try session.setCategory(.record, mode: .measurement, options: [.duckOthers, .allowBluetoothHFP, .allowBluetoothA2DP])
                 try session.setActive(true, options: .notifyOthersOnDeactivation)
             } catch {
                 throw SpeechTranscriberError.audioSessionConfigurationFailed(underlying: error)
@@ -316,7 +316,7 @@ public enum SpeechTranscriber {
             }
             do {
                 let session = AVAudioSession.sharedInstance()
-                try session.setCategory(.record, mode: .measurement, options: [.duckOthers, .allowBluetooth, .allowBluetoothA2DP])
+                try session.setCategory(.record, mode: .measurement, options: [.duckOthers, .allowBluetoothHFP, .allowBluetoothA2DP])
                 try session.setActive(true, options: .notifyOthersOnDeactivation)
             } catch {
                 throw SpeechTranscriberError.audioSessionConfigurationFailed(underlying: error)
@@ -400,7 +400,7 @@ public enum SpeechTranscriber {
         guard status == .authorized else { throw SpeechTranscriberError.speechNotAuthorized(status: status) }
 
         let micAuthorized = await withCheckedContinuation { (cont: CheckedContinuation<Bool, Never>) in
-            AVAudioSession.sharedInstance().requestRecordPermission { granted in
+            AVAudioApplication.requestRecordPermission { granted in
                 cont.resume(returning: granted)
             }
         }
