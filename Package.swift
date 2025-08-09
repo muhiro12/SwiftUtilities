@@ -1,4 +1,4 @@
-// swift-tools-version: 6.2
+// swift-tools-version: 6.0
 // The swift-tools-version declares the minimum version of Swift required to build this package.
 
 import PackageDescription
@@ -15,6 +15,12 @@ let package = Package(
         )
     ],
     targets: [
-        .target(name: "SwiftUtilities")
+        .target(
+            name: "SwiftUtilities",
+            linkerSettings: [
+                .linkedFramework("Speech", .when(platforms: [.iOS])),
+                .linkedFramework("AVFAudio", .when(platforms: [.iOS]))
+            ]
+        )
     ]
 )
