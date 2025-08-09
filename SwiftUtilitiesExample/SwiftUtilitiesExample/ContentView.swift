@@ -23,8 +23,8 @@ struct ContentView: View {
                 }
                 Section("Model") {
                     NavigationLink("IntentPerformer") { IntentPerformerExampleView() }
-                    NavigationLink("SwiftUtilitiesError") { SwiftUtilitiesErrorExampleView() }
                     NavigationLink("SpeechTranscriber") { SpeechTranscriberExampleView() }
+                    NavigationLink("SwiftUtilitiesError") { SwiftUtilitiesErrorExampleView() }
                 }
             }
             .navigationTitle("SwiftUtilities Examples")
