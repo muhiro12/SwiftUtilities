@@ -1,4 +1,5 @@
 import Foundation
+import OSLog
 @preconcurrency import AVFoundation
 @preconcurrency import Speech
 
@@ -17,8 +18,57 @@ public struct TranscriptionResult: Sendable, Equatable {
 /// - Falls back to SFSpeechRecognizer streaming on older iOS versions.
 public final class SpeechInputManager {
     // MARK: Public surface
-    public enum State: Equatable { case idle, recording, paused }
+    public enum State: Sendable, Equatable { case idle, recording, paused }
     public private(set) var state: State = .idle
+
+    public enum Event: Sendable, Equatable {
+        case info(String)
+        case warning(String)
+        case error(String)
+        case stateChanged(State)
+        case permissionsChecked(microphone: Bool, speech: Bool?)
+        case modelInstallStarted(Locale)
+        case modelInstallCompleted(Locale)
+        case analyzerReady
+        case engineStarted
+        case engineStopped
+        case recognitionStarted(legacy: Bool)
+    }
+
+    public enum SpeechInputError: LocalizedError, Sendable {
+        case microphonePermissionDenied
+        case speechPermissionDenied
+        case analyzerFormatUnavailable
+        case localeNotSupported
+        case audioSessionActivationFailed(underlying: Error?)
+        case analyzerStartFailed
+        case audioEngineStartFailed(underlying: Error?)
+        case recognizerUnavailable
+
+        public var errorDescription: String? {
+            switch self {
+            case .microphonePermissionDenied:
+                return "Microphone permission denied"
+            case .speechPermissionDenied:
+                return "Speech recognition permission denied"
+            case .analyzerFormatUnavailable:
+                return "No compatible audio format for SpeechAnalyzer"
+            case .localeNotSupported:
+                return "Locale not supported by on-device model"
+            case .audioSessionActivationFailed(let underlying):
+                return "Failed to activate audio session\(underlying.map { ": \($0.localizedDescription)" } ?? "")"
+            case .analyzerStartFailed:
+                return "Failed to start SpeechAnalyzer"
+            case .audioEngineStartFailed(let underlying):
+                return "Failed to start audio engine\(underlying.map { ": \($0.localizedDescription)" } ?? "")"
+            case .recognizerUnavailable:
+                return "No available SFSpeechRecognizer for locale"
+            }
+        }
+    }
+
+    public var onEvent: @Sendable (Event) -> Void = { _ in }
+    private let logger = Logger(subsystem: "SwiftUtilities", category: "SpeechInput")
 
     public init() {}
 
@@ -27,11 +77,18 @@ public final class SpeechInputManager {
     @MainActor
     public func start(locale: Locale = .current,
                       reportVolatile: Bool = true) async throws -> AsyncStream<TranscriptionResult> {
-        guard await Self.isMicrophoneAuthorized() else {
-            throw NSError(domain: "SpeechInputManager", code: 1, userInfo: [NSLocalizedDescriptionKey: "Microphone permission denied"])
-        }
+        let micOK = await Self.isMicrophoneAuthorized()
+        var speechOK: Bool? = nil
+        onEvent(.permissionsChecked(microphone: micOK, speech: nil))
+        guard micOK else { throw SpeechInputError.microphonePermissionDenied }
 
-        try self.audioSession.activate()
+        do {
+            try self.audioSession.activate()
+        } catch {
+            onEvent(.error("Audio session activation failed: \(error.localizedDescription)"))
+            logger.error("Audio session activation failed: \(error.localizedDescription)")
+            throw SpeechInputError.audioSessionActivationFailed(underlying: error)
+        }
 
         if #available(iOS 26.0, *) {
             return try await start_iOS26(locale: locale, reportVolatile: reportVolatile)
@@ -45,6 +102,7 @@ public final class SpeechInputManager {
         guard state == .recording else { return }
         audioEngine?.pause()
         state = .paused
+        onEvent(.stateChanged(state))
     }
 
     /// Resumes the audio engine if possible.
@@ -52,6 +110,7 @@ public final class SpeechInputManager {
         guard state == .paused else { return }
         try audioEngine?.start()
         state = .recording
+        onEvent(.stateChanged(state))
     }
 
     /// Stops streaming, finalizes recognition, and deactivates the audio session.
@@ -60,6 +119,8 @@ public final class SpeechInputManager {
         audioEngine?.stop()
         audioEngine?.inputNode.removeTap(onBus: 0)
         state = .idle
+        onEvent(.engineStopped)
+        onEvent(.stateChanged(state))
 
         if #available(iOS 26.0, *) {
             if let pipeline = ios26Pipeline as? IOS26Pipeline {
@@ -113,7 +174,8 @@ public final class SpeechInputManager {
 
         let analyzer = SpeechAnalyzer(modules: [transcriber])
         guard let analyzerFormat = await SpeechAnalyzer.bestAvailableAudioFormat(compatibleWith: [transcriber]) else {
-            throw NSError(domain: "SpeechInputManager", code: 5, userInfo: [NSLocalizedDescriptionKey: "No compatible audio format for SpeechAnalyzer"])
+            onEvent(.error("Analyzer format unavailable"))
+            throw SpeechInputError.analyzerFormatUnavailable
         }
         let (sequence, builder) = AsyncStream<AnalyzerInput>.makeStream()
 
@@ -133,11 +195,20 @@ public final class SpeechInputManager {
                     }
                 } catch {
                     // Swallow errors into stream termination
+                    self.logger.warning("Transcriber results ended with error: \(error.localizedDescription)")
+                    self.onEvent(.warning("Transcriber ended: \(error.localizedDescription)"))
                 }
             }
         }
 
-        try await analyzer.start(inputSequence: sequence)
+        do {
+            try await analyzer.start(inputSequence: sequence)
+            onEvent(.analyzerReady)
+        } catch {
+            onEvent(.error("Analyzer start failed: \(error.localizedDescription)"))
+            logger.error("Analyzer start failed: \(error.localizedDescription)")
+            throw SpeechInputError.analyzerStartFailed
+        }
 
         // Mic tap: capture and convert to analyzer format
         let inputNode = engine.inputNode
@@ -154,8 +225,16 @@ public final class SpeechInputManager {
         }
 
         engine.prepare()
-        try engine.start()
+        do {
+            try engine.start()
+        } catch {
+            onEvent(.error("Audio engine start failed: \(error.localizedDescription)"))
+            logger.error("Engine start failed: \(error.localizedDescription)")
+            throw SpeechInputError.audioEngineStartFailed(underlying: error)
+        }
         state = .recording
+        onEvent(.engineStarted)
+        onEvent(.stateChanged(state))
         return stream
     }
 
@@ -164,7 +243,8 @@ public final class SpeechInputManager {
     private func ensureModel_iOS26(transcriber: SpeechTranscriber, locale: Locale) async throws {
         let supported = await SpeechTranscriber.supportedLocales
         guard supported.map({ $0.identifier(.bcp47) }).contains(locale.identifier(.bcp47)) else {
-            throw NSError(domain: "SpeechInputManager", code: 2, userInfo: [NSLocalizedDescriptionKey: "Locale not supported by on-device model"])
+            onEvent(.warning("Locale not supported: \(locale.identifier(.bcp47))"))
+            throw SpeechInputError.localeNotSupported
         }
 
         let installed = await Set(SpeechTranscriber.installedLocales)
@@ -173,7 +253,9 @@ public final class SpeechInputManager {
         }
 
         if let request = try await AssetInventory.assetInstallationRequest(supporting: [transcriber]) {
+            onEvent(.modelInstallStarted(locale))
             try await request.downloadAndInstall()
+            onEvent(.modelInstallCompleted(locale))
         }
     }
 
@@ -188,12 +270,12 @@ public final class SpeechInputManager {
         let auth = await withCheckedContinuation { (cont: CheckedContinuation<SFSpeechRecognizerAuthorizationStatus, Never>) in
             SFSpeechRecognizer.requestAuthorization { cont.resume(returning: $0) }
         }
-        guard auth == .authorized else {
-            throw NSError(domain: "SpeechInputManager", code: 3, userInfo: [NSLocalizedDescriptionKey: "Speech recognition not authorized"])
-        }
+        onEvent(.permissionsChecked(microphone: true, speech: auth == .authorized))
+        guard auth == .authorized else { throw SpeechInputError.speechPermissionDenied }
 
         guard let recognizer = SFSpeechRecognizer(locale: locale) ?? SFSpeechRecognizer() else {
-            throw NSError(domain: "SpeechInputManager", code: 4, userInfo: [NSLocalizedDescriptionKey: "No available SFSpeechRecognizer for locale"])
+            onEvent(.error("SFSpeechRecognizer unavailable for locale"))
+            throw SpeechInputError.recognizerUnavailable
         }
         recognizer_legacy = recognizer
 
@@ -211,8 +293,10 @@ public final class SpeechInputManager {
                     continuation.yield(.init(text: text, isFinal: result.isFinal))
                 } else if error != nil {
                     // terminate on error
+                    self.onEvent(.warning("Recognition task ended: \(error!.localizedDescription)"))
                 }
             }
+            self.onEvent(.recognitionStarted(legacy: true))
         }
 
         let inputNode = engine.inputNode
@@ -222,8 +306,16 @@ public final class SpeechInputManager {
         }
 
         engine.prepare()
-        try engine.start()
+        do {
+            try engine.start()
+        } catch {
+            onEvent(.error("Audio engine start failed: \(error.localizedDescription)"))
+            logger.error("Engine start failed: \(error.localizedDescription)")
+            throw SpeechInputError.audioEngineStartFailed(underlying: error)
+        }
         state = .recording
+        onEvent(.engineStarted)
+        onEvent(.stateChanged(state))
         return stream
     }
 
@@ -280,4 +372,3 @@ private final class IOS26Pipeline {
         recognizerTask = nil
     }
 }
-
