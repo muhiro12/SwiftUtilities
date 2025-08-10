@@ -5,6 +5,8 @@
 //  Created by Hiromu Nakano on 9/18/24.
 //
 
+import Foundation
+
 public extension StringProtocol {
     func normalizedContains<T>(_ other: T) -> Bool where T : StringProtocol {
         let normalizedSelf = self
