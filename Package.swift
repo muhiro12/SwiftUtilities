@@ -5,10 +5,15 @@ import PackageDescription
 
 let package = Package(
     name: "SwiftUtilities",
+    platforms: [
+        .iOS(.v17)
+    ],
     products: [
         .library(
             name: "SwiftUtilities",
-            targets: ["SwiftUtilities"]
+            targets: [
+                "SwiftUtilities"
+            ]
         )
     ],
     targets: [
