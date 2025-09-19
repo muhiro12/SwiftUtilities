@@ -6,7 +6,7 @@
 //  Copyright © 2020 Hiromu Nakano. All rights reserved.
 //
 
-import SwiftUI
+import Foundation
 
 public nonisolated extension Decimal {
     var isPlus: Bool {
