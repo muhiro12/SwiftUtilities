@@ -8,6 +8,7 @@
 import SwiftUI
 
 public extension Image {
+    #if canImport(UIKit)
     init(data: Data) {
         if let uiImage = UIImage(data: data) {
             self = .init(uiImage: uiImage)
@@ -15,4 +16,5 @@ public extension Image {
             self = .init(.empty)
         }
     }
+    #endif
 }

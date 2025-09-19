@@ -7,6 +7,7 @@
 
 import SwiftUI
 
+#if canImport(UIKit)
 public extension UIImage {
     static var appIcon: UIImage {
         guard let icons = Bundle.main.infoDictionary?["CFBundleIcons"] as? [String: Any],
@@ -18,3 +19,4 @@ public extension UIImage {
         return .init(named: iconName) ?? .init()
     }
 }
+#endif
