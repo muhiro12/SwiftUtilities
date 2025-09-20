@@ -8,6 +8,7 @@
 import SwiftData
 
 public extension PersistentModel {
+    /// Deletes the model instance from its associated model context.
     func delete() {
         modelContext?.delete(self)
     }

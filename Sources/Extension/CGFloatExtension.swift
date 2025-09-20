@@ -8,6 +8,7 @@
 import SwiftUI
 
 extension CGFloat {
+    /// Discrete size scales used across spacing, icon, and component dimensions.
     public enum Scale {
         case xs
         case s
@@ -18,6 +19,9 @@ extension CGFloat {
 
     private static let unit = Self(8)
 
+    /// Returns a spacing value for the given scale.
+    /// - Parameter size: The scale to convert to a spacing in points.
+    /// - Returns: A spacing in points based on the design unit.
     public static func space(_ size: Scale) -> Self {
         switch size {
         case .xs:
@@ -33,6 +37,9 @@ extension CGFloat {
         }
     }
 
+    /// Returns an icon size for the given scale.
+    /// - Parameter size: The scale to convert to an icon size in points.
+    /// - Returns: An icon size in points based on the design unit.
     public static func icon(_ size: Scale) -> Self {
         switch size {
         case .xs:
@@ -48,6 +55,9 @@ extension CGFloat {
         }
     }
 
+    /// Returns a component dimension for the given scale (e.g., button height).
+    /// - Parameter size: The scale to convert to a component size in points.
+    /// - Returns: A component size in points based on the design unit.
     public static func component(_ size: Scale) -> Self {
         switch size {
         case .xs:

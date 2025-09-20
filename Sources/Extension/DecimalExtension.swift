@@ -9,10 +9,12 @@
 import Foundation
 
 public nonisolated extension Decimal {
+    /// A Boolean value indicating whether the number is greater than zero.
     var isPlus: Bool {
         self > .zero
     }
 
+    /// A Boolean value indicating whether the number is less than zero.
     var isMinus: Bool {
         self < .zero
     }

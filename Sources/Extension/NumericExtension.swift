@@ -8,10 +8,12 @@
 import Foundation
 
 public extension Numeric {
+    /// A Boolean value indicating whether the numeric value equals zero.
     var isZero: Bool {
         self == .zero
     }
     
+    /// A Boolean value indicating whether the numeric value is not zero.
     var isNotZero: Bool {
         !isZero
     }

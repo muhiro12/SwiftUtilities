@@ -10,6 +10,7 @@ import SwiftUI
 public struct CloseButton: View {
     @Environment(\.dismiss) private var dismiss
 
+    /// Creates a close button that dismisses the current presentation when tapped.
     public init() {}
 
     public var body: some View {

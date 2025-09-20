@@ -8,6 +8,7 @@
 import SwiftUI
 
 public extension Color {
+    /// Returns a random color with RGB components in the range `0...1`.
     static func random() -> Self {
         return Self(
             red: .random(in: 0...1),
@@ -17,6 +18,9 @@ public extension Color {
     }
 
     @MainActor
+    /// Returns a color derived by adjusting the base color using a reproducible integer seed.
+    /// - Parameter adjustmentValue: An integer seed used to perturb RGB channels.
+    /// - Returns: A color adjusted from the receiver using the provided seed.
     func adjusted(by adjustmentValue: Int) -> Self {
         modifier(
             AdjustmentModifier(
@@ -26,12 +30,14 @@ public extension Color {
         ) as? Self ?? self
     }
 
+    /// A view modifier that deterministically adjusts a color based on an integer seed.
     struct AdjustmentModifier: ViewModifier {
         @Environment(\.self) private var environment
 
         let baseColor: Color
         let adjustmentValue: Int
 
+        /// Applies the modifier and returns an adjusted color.
         public func body(content: Content) -> some View {
             guard let components = baseColor.resolve(in: environment).cgColor.components, components.count >= 3 else {
                 return baseColor

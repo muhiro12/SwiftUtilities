@@ -9,6 +9,7 @@ import SwiftUI
 
 #if canImport(UIKit)
 public extension UIImage {
+    /// The primary application icon image resolved from the bundle, or an empty image when unavailable.
     static var appIcon: UIImage {
         guard let icons = Bundle.main.infoDictionary?["CFBundleIcons"] as? [String: Any],
               let primaryIcon = icons["CFBundlePrimaryIcon"] as? [String: Any],
