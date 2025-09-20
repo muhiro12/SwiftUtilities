@@ -36,15 +36,15 @@ extension CGFloat {
     public static func icon(_ size: Scale) -> Self {
         switch size {
         case .xs:
-            unit * 0.5
-        case .s:
             unit * 1
+        case .s:
+            unit * 2
         case .m:
-            unit * 5
+            unit * 3
         case .l:
-            unit * 6
+            unit * 5
         case .xl:
-            unit * 8
+            unit * 6
         }
     }
 

@@ -15,11 +15,12 @@ struct CGFloatExtensionTests {
 
     @Test
     func iconValues() {
-        #expect(CGFloat.icon(.xs) == 4)
-        #expect(CGFloat.icon(.s) == 8)
-        #expect(CGFloat.icon(.m) == 40)
-        #expect(CGFloat.icon(.l) == 48)
-        #expect(CGFloat.icon(.xl) == 64)
+        // Updated mapping in CGFloatExtension.icon
+        #expect(CGFloat.icon(.xs) == 8)
+        #expect(CGFloat.icon(.s) == 16)
+        #expect(CGFloat.icon(.m) == 24)
+        #expect(CGFloat.icon(.l) == 40)
+        #expect(CGFloat.icon(.xl) == 48)
     }
 
     @Test
@@ -31,4 +32,3 @@ struct CGFloatExtensionTests {
         #expect(CGFloat.component(.xl) == 320)
     }
 }
-
