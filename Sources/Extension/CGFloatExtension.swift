@@ -62,6 +62,4 @@ extension CGFloat {
             unit * 40
         }
     }
-
-    public static let minimumScaleFactor = 0.5
 }

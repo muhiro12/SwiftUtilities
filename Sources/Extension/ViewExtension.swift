@@ -14,4 +14,14 @@ public extension View {
             self
         }
     }
+
+    func singleLine(minScaleFactor: CGFloat = 0.5) -> some View {
+        lineLimit(1)
+            .minimumScaleFactor(minScaleFactor)
+    }
+
+    func twoLines(minScaleFactor: CGFloat = 0.5) -> some View {
+        lineLimit(2)
+            .minimumScaleFactor(minScaleFactor)
+    }
 }
