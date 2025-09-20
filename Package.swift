@@ -20,6 +20,10 @@ let package = Package(
     targets: [
         .target(
             name: "SwiftUtilities"
+        ),
+        .testTarget(
+            name: "SwiftUtilitiesTests",
+            dependencies: ["SwiftUtilities"]
         )
     ]
 )
