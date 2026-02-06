@@ -18,7 +18,7 @@ struct StringAndDateFormatterExtensionTests {
     func dateFormatterFixedAndDefault() {
         // Fixed format is literal and locale-independent
         let fixed = DateFormatter.fixed(.yyyyMMdd)
-        let comps = DateComponents(calendar: .init(identifier: .gregorian), timeZone: .init(secondsFromGMT: 0), year: 2024, month: 1, day: 2)
+        let comps = DateComponents(calendar: .init(identifier: .gregorian), timeZone: .current, year: 2024, month: 1, day: 2)
         let date = comps.date!
         #expect(fixed.string(from: date) == "20240102")
 
@@ -27,6 +27,14 @@ struct StringAndDateFormatterExtensionTests {
         let formatted = DateFormatter.default(.yyyyMMMd, locale: us).string(from: date)
         // Template "yyyyMMMd" in en_US becomes e.g. "Jan 2, 2024"
         #expect(formatted == "Jan 2, 2024")
+    }
+
+    @Test
+    func dateFormatterFactoriesCreateIndependentInstances() {
+        #expect(DateFormatter.fixed(.yyyyMMdd) !== DateFormatter.fixed(.yyyyMMdd))
+
+        let us = Locale(identifier: "en_US")
+        #expect(DateFormatter.default(.yyyyMMMd, locale: us) !== DateFormatter.default(.yyyyMMMd, locale: us))
     }
 
     @Test
@@ -46,5 +54,59 @@ struct StringAndDateFormatterExtensionTests {
         #expect(fixedStr == "20230926")
         #expect(fixedStr.dateValueWithoutLocale(.yyyyMMdd)?.stringValueWithoutLocale(.yyyyMMdd) == fixedStr)
     }
-}
 
+    @Test
+    func fixedTemplatesDoNotMixUnderParallelExecution() async {
+        let date = "20240102".dateValueWithoutLocale(.yyyyMMdd)!
+
+        await withTaskGroup(of: Void.self) { group in
+            for _ in 0 ..< 24 {
+                group.addTask {
+                    for _ in 0 ..< 600 {
+                        let yyyy = date.stringValueWithoutLocale(.yyyy)
+                        #expect(yyyy == "2024")
+                        #expect(yyyy.dateValueWithoutLocale(.yyyy)?.stringValueWithoutLocale(.yyyy) == "2024")
+
+                        let yyyyMM = date.stringValueWithoutLocale(.yyyyMM)
+                        #expect(yyyyMM == "202401")
+                        #expect(yyyyMM.dateValueWithoutLocale(.yyyyMM)?.stringValueWithoutLocale(.yyyyMM) == "202401")
+
+                        let yyyyMMdd = date.stringValueWithoutLocale(.yyyyMMdd)
+                        #expect(yyyyMMdd == "20240102")
+                        #expect(yyyyMMdd.dateValueWithoutLocale(.yyyyMMdd)?.stringValueWithoutLocale(.yyyyMMdd) == "20240102")
+
+                        let yyyyMMM = date.stringValueWithoutLocale(.yyyyMMM)
+                        #expect(yyyyMMM == "2024Jan")
+                        #expect(yyyyMMM.dateValueWithoutLocale(.yyyyMMM)?.stringValueWithoutLocale(.yyyyMMM) == "2024Jan")
+                    }
+                }
+            }
+            await group.waitForAll()
+        }
+    }
+
+    @Test
+    func localeAwareTemplatesDoNotMixUnderParallelExecution() async {
+        let comps = DateComponents(calendar: .init(identifier: .gregorian), timeZone: .current, year: 2024, month: 1, day: 2)
+        let date = comps.date!
+        let expectedYYYY = DateFormatter.default(.yyyy, locale: Locale(identifier: "en_US")).string(from: date)
+        let expectedYYYYMM = DateFormatter.default(.yyyyMM, locale: Locale(identifier: "en_US")).string(from: date)
+        let expectedYYYYMMDD = DateFormatter.default(.yyyyMMdd, locale: Locale(identifier: "en_US")).string(from: date)
+        let expectedYYYYMMM = DateFormatter.default(.yyyyMMM, locale: Locale(identifier: "en_US")).string(from: date)
+
+        await withTaskGroup(of: Void.self) { group in
+            for _ in 0 ..< 24 {
+                group.addTask {
+                    for _ in 0 ..< 600 {
+                        let locale = Locale(identifier: "en_US")
+                        #expect(date.stringValue(.yyyy, locale: locale) == expectedYYYY)
+                        #expect(date.stringValue(.yyyyMM, locale: locale) == expectedYYYYMM)
+                        #expect(date.stringValue(.yyyyMMdd, locale: locale) == expectedYYYYMMDD)
+                        #expect(date.stringValue(.yyyyMMM, locale: locale) == expectedYYYYMMM)
+                    }
+                }
+            }
+            await group.waitForAll()
+        }
+    }
+}
