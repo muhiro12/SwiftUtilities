@@ -9,15 +9,15 @@ import AppKit
 import UIKit
 #endif
 
-@Suite("Color adjusted(by:)")
+@Suite("Color adjusted(by percentage)")
 struct ColorExtensionTests {
     typealias RGB = (red: CGFloat, green: CGFloat, blue: CGFloat)
 
     @Test
-    func adjustedByReturnsDifferentColorForPureRed() {
+    func adjustedByReturnsDifferentColorForPureRedAtHundredPercent() {
         guard
             let base = srgbComponents(from: Color.red),
-            let adjusted = srgbComponents(from: Color.red.adjusted(by: 1))
+            let adjusted = srgbComponents(from: Color.red.adjusted(by: 100))
         else {
             Issue.record("Failed to resolve sRGB components from Color.")
             return
@@ -27,13 +27,92 @@ struct ColorExtensionTests {
     }
 
     @Test
+    func pureRedAtHundredPercentBecomesYellowishOrange() {
+        let adjusted = Color.adjustedSRGBComponents(
+            red: 1,
+            green: 0,
+            blue: 0,
+            percentage: 100
+        )
+
+        #expect(adjusted.red > adjusted.green)
+        #expect(adjusted.green > adjusted.blue)
+        #expect(adjusted.green > 0.45)
+        #expect(adjusted.blue < 0.05)
+    }
+
+    @Test
+    func zeroPercentageKeepsOriginalColor() {
+        let base: RGB = (red: 0.8, green: 0.2, blue: 0.1)
+        let adjusted = Color.adjustedSRGBComponents(
+            red: base.red,
+            green: base.green,
+            blue: base.blue,
+            percentage: 0
+        )
+
+        #expect(distance(base, adjusted) < 0.000_001)
+    }
+
+    @Test
+    func higherPercentageProducesLargerDifference() {
+        let base: RGB = (red: 0.8, green: 0.2, blue: 0.1)
+        let low = Color.adjustedSRGBComponents(
+            red: base.red,
+            green: base.green,
+            blue: base.blue,
+            percentage: 25
+        )
+        let high = Color.adjustedSRGBComponents(
+            red: base.red,
+            green: base.green,
+            blue: base.blue,
+            percentage: 100
+        )
+
+        #expect(distance(base, high) > distance(base, low))
+    }
+
+    @Test
+    func percentageOverHundredIsClamped() {
+        let base: RGB = (red: 0.8, green: 0.2, blue: 0.1)
+        let full = Color.adjustedSRGBComponents(
+            red: base.red,
+            green: base.green,
+            blue: base.blue,
+            percentage: 100
+        )
+        let over = Color.adjustedSRGBComponents(
+            red: base.red,
+            green: base.green,
+            blue: base.blue,
+            percentage: 200
+        )
+
+        #expect(distance(full, over) < 0.000_001)
+    }
+
+    @Test
+    func negativePercentageIsClampedToOriginal() {
+        let base: RGB = (red: 0.3, green: 0.6, blue: 0.2)
+        let adjusted = Color.adjustedSRGBComponents(
+            red: base.red,
+            green: base.green,
+            blue: base.blue,
+            percentage: -40
+        )
+
+        #expect(distance(base, adjusted) < 0.000_001)
+    }
+
+    @Test
     func adjustedComponentsStayInBounds() {
-        for adjustmentValue in stride(from: -256, through: 256, by: 17) {
+        for percentage in stride(from: -100.0, through: 200.0, by: 7.5) {
             let adjusted = Color.adjustedSRGBComponents(
                 red: 0.92,
                 green: 0.08,
                 blue: 0.13,
-                adjustmentValue: adjustmentValue
+                percentage: percentage
             )
 
             #expect(adjusted.red >= 0 && adjusted.red <= 1)
@@ -43,43 +122,16 @@ struct ColorExtensionTests {
     }
 
     @Test
-    func pureRedVariantsAreVisiblySeparated() {
-        let base: RGB = (red: 1, green: 0, blue: 0)
-        let variants = (0..<8).map {
-            Color.adjustedSRGBComponents(
-                red: base.red,
-                green: base.green,
-                blue: base.blue,
-                adjustmentValue: $0
-            )
-        }
-
-        let minimumDistanceFromBase = variants.map { distance(base, $0) }.min() ?? 0
-        #expect(minimumDistanceFromBase > 0.20)
-        #expect(minPairwiseDistance(variants) > 0.20)
-    }
-
-    @Test
-    func grayVariantsAreStillDistinguishable() {
+    func fullPercentageIsDistinctForGray() {
         let base: RGB = (red: 0.4, green: 0.4, blue: 0.4)
-        let variants = (0..<8).map {
-            Color.adjustedSRGBComponents(
-                red: base.red,
-                green: base.green,
-                blue: base.blue,
-                adjustmentValue: $0
-            )
-        }
+        let adjusted = Color.adjustedSRGBComponents(
+            red: base.red,
+            green: base.green,
+            blue: base.blue,
+            percentage: 100
+        )
 
-        let minimumDistanceFromBase = variants.map { distance(base, $0) }.min() ?? 0
-        #expect(minimumDistanceFromBase > 0.10)
-        #expect(minPairwiseDistance(variants) > 0.04)
-
-        for variant in variants {
-            let spread = max(variant.red, max(variant.green, variant.blue))
-                - min(variant.red, min(variant.green, variant.blue))
-            #expect(spread > 0.02)
-        }
+        #expect(distance(base, adjusted) > 0.10)
     }
 
     @Test
@@ -88,13 +140,13 @@ struct ColorExtensionTests {
             red: 0.18,
             green: 0.36,
             blue: 0.72,
-            adjustmentValue: 42
+            percentage: 75
         )
         let second = Color.adjustedSRGBComponents(
             red: 0.18,
             green: 0.36,
             blue: 0.72,
-            adjustmentValue: 42
+            percentage: 75
         )
 
         #expect(distance(first, second) < 0.000_001)
@@ -131,15 +183,5 @@ struct ColorExtensionTests {
         let greenDelta = lhs.green - rhs.green
         let blueDelta = lhs.blue - rhs.blue
         return sqrt(redDelta * redDelta + greenDelta * greenDelta + blueDelta * blueDelta)
-    }
-
-    private func minPairwiseDistance(_ values: [RGB]) -> CGFloat {
-        var minimum = CGFloat.greatestFiniteMagnitude
-        for leftIndex in values.indices {
-            for rightIndex in values.indices where rightIndex > leftIndex {
-                minimum = min(minimum, distance(values[leftIndex], values[rightIndex]))
-            }
-        }
-        return minimum
     }
 }

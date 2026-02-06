@@ -24,10 +24,14 @@ public extension Color {
         )
     }
 
-    /// Returns a color derived by adjusting the base color using a reproducible integer seed.
-    /// - Parameter adjustmentValue: An integer seed used to perturb hue, saturation, and brightness.
-    /// - Returns: A color adjusted from the receiver using the provided seed.
-    func adjusted(by adjustmentValue: Int) -> Self {
+    /// Returns a color that is shifted away from the receiver by the specified percentage.
+    ///
+    /// - Parameter percentage:
+    ///   - `0` means "no change" (the original color).
+    ///   - `100` means "full adjustment" (the strongest built-in shift for this color).
+    ///   - Values outside `0...100` are clamped.
+    /// - Returns: A color blended between the original and its fully-adjusted variant.
+    func adjusted(by percentage: Double) -> Self {
         guard let components = Self.srgbComponents(from: self) else {
             return self
         }
@@ -36,7 +40,7 @@ public extension Color {
             red: components.red,
             green: components.green,
             blue: components.blue,
-            adjustmentValue: adjustmentValue
+            percentage: percentage
         )
 
         return Color(
@@ -51,36 +55,62 @@ public extension Color {
         red: CGFloat,
         green: CGFloat,
         blue: CGFloat,
-        adjustmentValue: Int
+        percentage: Double
+    ) -> (red: CGFloat, green: CGFloat, blue: CGFloat) {
+        let amount = normalizedPercentage(percentage)
+        guard amount > 0 else {
+            return (red: red, green: green, blue: blue)
+        }
+
+        let fullyAdjusted = fullAdjustedSRGBComponents(
+            red: red,
+            green: green,
+            blue: blue
+        )
+
+        guard amount < 1 else {
+            return fullyAdjusted
+        }
+
+        return (
+            red: blend(from: red, to: fullyAdjusted.red, amount: amount),
+            green: blend(from: green, to: fullyAdjusted.green, amount: amount),
+            blue: blend(from: blue, to: fullyAdjusted.blue, amount: amount)
+        )
+    }
+
+    private static func fullAdjustedSRGBComponents(
+        red: CGFloat,
+        green: CGFloat,
+        blue: CGFloat
     ) -> (red: CGFloat, green: CGFloat, blue: CGFloat) {
         let hsv = rgbToHSV(red: red, green: green, blue: blue)
 
-        let hueSignal = lowDiscrepancySignal(adjustmentValue, offset: 0.00)
-        let saturationSignal = lowDiscrepancySignal(adjustmentValue, offset: 0.31)
-        let brightnessSignal = lowDiscrepancySignal(adjustmentValue, offset: 0.63)
+        // Rotate hue to keep high-saturation colors within a nearby family
+        // (e.g. red -> yellowish orange at 100%) while still separating categories.
+        let hueShift: CGFloat = hsv.saturation < 0.15 ? 0.26 : 0.11
+        let adjustedHue = wrappedUnit(hsv.hue + hueShift)
 
-        var adjustedHue = wrappedUnit(hsv.hue + hueSignal * 0.40)
-        var adjustedSaturation = clamp(
-            hsv.saturation + saturationSignal * 0.24,
-            lower: 0.25,
-            upper: 1
-        )
-        let adjustedBrightness = clamp(
-            hsv.brightness + brightnessSignal * 0.20,
-            lower: 0.30,
-            upper: 1
-        )
+        // Lift saturation so low-chroma colors do not collapse into near-gray variants.
+        let adjustedSaturation = clamp(max(hsv.saturation + 0.18, 0.45), lower: 0, upper: 1)
 
-        if hsv.saturation < 0.15 {
-            adjustedHue = wrappedUnit(CGFloat(Double(adjustmentValue) * 0.3819660112501051))
-            adjustedSaturation = max(adjustedSaturation, 0.45)
-        }
+        // Move brightness away from the current level to improve side-by-side distinction.
+        let brightnessDelta: CGFloat = hsv.brightness >= 0.55 ? -0.18 : 0.18
+        let adjustedBrightness = clamp(hsv.brightness + brightnessDelta, lower: 0.25, upper: 1)
 
         return hsvToRGB(
             hue: adjustedHue,
             saturation: adjustedSaturation,
             brightness: adjustedBrightness
         )
+    }
+
+    private static func normalizedPercentage(_ percentage: Double) -> CGFloat {
+        return clamp(CGFloat(percentage / 100), lower: 0, upper: 1)
+    }
+
+    private static func blend(from: CGFloat, to: CGFloat, amount: CGFloat) -> CGFloat {
+        return from + (to - from) * amount
     }
 
     private static func srgbComponents(from color: Color) -> (red: CGFloat, green: CGFloat, blue: CGFloat, opacity: CGFloat)? {
@@ -138,18 +168,6 @@ public extension Color {
             blue: components[2],
             opacity: srgbColor.alpha
         )
-    }
-
-    private static func lowDiscrepancySignal(_ adjustmentValue: Int, offset: Double) -> CGFloat {
-        let raw = Double(adjustmentValue) * 0.618033988749895 + offset
-        let fractional = raw - floor(raw)
-        let signed = CGFloat(fractional * 2 - 1)
-        return curve(signed)
-    }
-
-    private static func curve(_ value: CGFloat) -> CGFloat {
-        let magnitude = pow(abs(value), 0.8)
-        return value < 0 ? -magnitude : magnitude
     }
 
     private static func clamp(_ value: CGFloat, lower: CGFloat, upper: CGFloat) -> CGFloat {
