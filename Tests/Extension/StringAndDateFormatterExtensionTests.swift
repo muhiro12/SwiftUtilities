@@ -4,6 +4,8 @@ import Foundation
 
 @Suite("String/DateFormatter/Date Extensions")
 struct StringAndDateFormatterExtensionTests {
+    private let utc = TimeZone(secondsFromGMT: 0)!
+
     @Test
     func stringDecimalHelpers() {
         #expect("".isEmptyOrDecimal)
@@ -18,13 +20,25 @@ struct StringAndDateFormatterExtensionTests {
     func dateFormatterFixedAndDefault() {
         // Fixed format is literal and locale-independent
         let fixed = DateFormatter.fixed(.yyyyMMdd)
-        let comps = DateComponents(calendar: .init(identifier: .gregorian), timeZone: .current, year: 2024, month: 1, day: 2)
-        let date = comps.date!
-        #expect(fixed.string(from: date) == "20240102")
+        let fixedDate = DateComponents(
+            calendar: .init(identifier: .gregorian),
+            timeZone: utc,
+            year: 2024,
+            month: 1,
+            day: 2
+        ).date!
+        #expect(fixed.string(from: fixedDate) == "20240102")
 
         // Default uses provided locale
+        let localDate = DateComponents(
+            calendar: .init(identifier: .gregorian),
+            timeZone: .current,
+            year: 2024,
+            month: 1,
+            day: 2
+        ).date!
         let us = Locale(identifier: "en_US")
-        let formatted = DateFormatter.default(.yyyyMMMd, locale: us).string(from: date)
+        let formatted = DateFormatter.default(.yyyyMMMd, locale: us).string(from: localDate)
         // Template "yyyyMMMd" in en_US becomes e.g. "Jan 2, 2024"
         #expect(formatted == "Jan 2, 2024")
     }
@@ -35,6 +49,21 @@ struct StringAndDateFormatterExtensionTests {
 
         let us = Locale(identifier: "en_US")
         #expect(DateFormatter.default(.yyyyMMMd, locale: us) !== DateFormatter.default(.yyyyMMMd, locale: us))
+    }
+
+    @Test
+    func fixedFormatterPinsPosixLocaleAndUTCTimeZone() {
+        let fixed = DateFormatter.fixed(.yyyyMMdd)
+        #expect(fixed.locale.identifier == "en_US_POSIX")
+        #expect(fixed.timeZone.secondsFromGMT(for: Date(timeIntervalSinceReferenceDate: 0)) == 0)
+    }
+
+    @Test
+    func fixedFormattingAndParsingAreDeterministicAtBoundaryInstant() {
+        let boundaryDate = Date(timeIntervalSinceReferenceDate: 0) // 2001-01-01T00:00:00Z
+
+        #expect(boundaryDate.stringValueWithoutLocale(.yyyy) == "2001")
+        #expect("20010101".dateValueWithoutLocale(.yyyyMMdd) == boundaryDate)
     }
 
     @Test
@@ -86,8 +115,27 @@ struct StringAndDateFormatterExtensionTests {
     }
 
     @Test
+    func fixedYearFormattingAndYyyyMMddParsingStayStableAtBoundaryInParallel() async {
+        let boundaryDate = Date(timeIntervalSinceReferenceDate: 0) // 2001-01-01T00:00:00Z
+
+        await withTaskGroup(of: Void.self) { group in
+            for _ in 0 ..< 24 {
+                group.addTask {
+                    for _ in 0 ..< 600 {
+                        #expect(boundaryDate.stringValueWithoutLocale(.yyyy) == "2001")
+                        let parsed = "20010101".dateValueWithoutLocale(.yyyyMMdd)
+                        #expect(parsed == boundaryDate)
+                        #expect(parsed?.stringValueWithoutLocale(.yyyy) == "2001")
+                    }
+                }
+            }
+            await group.waitForAll()
+        }
+    }
+
+    @Test
     func localeAwareTemplatesDoNotMixUnderParallelExecution() async {
-        let comps = DateComponents(calendar: .init(identifier: .gregorian), timeZone: .current, year: 2024, month: 1, day: 2)
+        let comps = DateComponents(calendar: .init(identifier: .gregorian), timeZone: utc, year: 2024, month: 1, day: 2)
         let date = comps.date!
         let expectedYYYY = DateFormatter.default(.yyyy, locale: Locale(identifier: "en_US")).string(from: date)
         let expectedYYYYMM = DateFormatter.default(.yyyyMM, locale: Locale(identifier: "en_US")).string(from: date)
